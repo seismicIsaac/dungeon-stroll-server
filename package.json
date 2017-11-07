@@ -1,0 +1,26 @@
+{
+  "name": "dungeon-stroll-server",
+  "version": "1.0.0",
+  "description": "Backend service for dungeon stroll",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "rm -rf ./build && webpack --config webpack.config.server.js"
+  },
+  "dependencies": {
+    "body-parser": "~1.0.1",
+    "cors": "^2.8.4",
+    "express": "~4.0.0",
+    "mongoose": "~3.6.13"
+  },
+  "author": "iaustin",
+  "license": "ISC",
+  "devDependencies": {
+    "babel-core": "^6.26.0",
+    "babel-loader": "^7.1.2",
+    "babel-preset-env": "^1.6.1",
+    "start-server-webpack-plugin": "^2.2.0",
+    "webpack": "^3.8.1",
+    "webpack-node-externals": "^1.6.0"
+  }
+}
