@@ -1,5 +1,11 @@
-var Party = require('./model/Party');
+var GameController = require('./controller/game-controller');
 var PartyController = require('./controller/party-controller');
+var MapController = require('./controller/map-controller');
+var LocationController = require('./controller/location-controller');
+var TimeController = require('./controller/time-controller');
+var EncounterController = require('./controller/encounter-controller');
+var BattleController = require('./controller/battle-controller');
+var MapEventController = require('./controller/map-event-controller');
 
 var express = require('express');
 var cors = require('cors');
@@ -14,6 +20,15 @@ var port = process.env.PORT || 8080;
 
 var router = express.Router();
 
+let gameController = new GameController();
+let partyController = new PartyController();
+let timeController = new TimeController();
+let locationController = new LocationController();
+let mapController = new MapController();
+let encounterController = new EncounterController();
+let battleController = new BattleController();
+let mapEventController = new MapEventController();
+
 router.use(function(request, result, next) {
   // Log request. Maybe make sure the request has a valid key for the next move?
   console.log('Request Url: ', request.originalUrl);
@@ -25,78 +40,84 @@ router.get('/', function(req, res) {
   res.json({message: 'hblah blah blah i am cool'});
 });
 
-router.route('/party')
-  
-// Create a new party | partyNames: array with 6 names
+router.route('/game')
+    //Create a new game
   .post(function(request, result) {
-    console.log('request.body ', request.body);
     if (!request.body || !request.body.partyNames || request.body.partyNames.length !== 6) {
       result.send('You suck you need to specify a partyNames array with 6 names.');
     } else {
-      var newParty = PartyController.createParty(request.body.partyNames);
-      result.json( newParty );
+      let gameData = {};
+      let obfuscatedGameData = gameController.generateNewGameObfuscatedData();
+      gameData.gameId = gameController.generateNewGameId();
+      gameData.party = partyController.createParty(request.body.partyNames);
+      gameData.location = locationController.getNewGameLocation();
+      gameData.viewableMap = mapController.getViewableMap(gameData.location, gameData.party.visionRadius);
+      gameData.dateTime = timeController.getNewGameDateTime();
+      gameController.cacheGame(gameData, obfuscatedGameData);
+      result.json( gameData );
     }
-  })
-
-  // Returns all parties. (Testing/convenience method.)
-  // TODO: Delete this because it shouldn't exist.
-  .get(function(request, result) {
-    result.json({ parties: PartyController.getParties() });
   });
 
-  router.route('/party/:partyId')
+  router.route('/game/:gameId')
 
-    // Get party by id.
     .get(function(request, result) {
-      var party = PartyController.getParty(request.params.partyId);
+      let gameData = gameController.getGameDataById(request.params.gameId)['gameData'];
+      result.json(gameData);
+    });
 
-      if (!party) {
-        result.json({ error: 'Party not found.'});
-      }
-      result.json({ party: party });
+  //Player Actions
+  router.route('/game/:gameId/location')
+    .get(function(request, result) {
+      let gameData = gameController.getGameDataById(request.params.gameId);
+      result.json(gameData.location);
     })
 
-    // Change the party location.
-    // TODO: Move me under a more specific route.
     .put(function(request, result) {
-      if (!request.body || !request.body.movementDelta || !request.body.facingDirection) {
+      const gameId = request.params.gameId;
+      const { gameData, obfuscatedGameData } = gameController.getAllGameData(gameId);
+      if (!locationController.isValidLocationRequest(request) && !gameData.battleState) {
         result.json({ error: 'Please specify a movement delta {x, y}, and a facing directions (string).'});
       } else {
-        var party = PartyController.processMovementRequest(request.params.partyId, request.body);
-        result.json({ party: party});
+  
+        console.log('GameData: ', gameData);
+        console.log('Obfuscated game data: ', obfuscatedGameData);
+        const movementRequest = request.body.movementDelta;
+        const oldLocation = gameData.location;
+        let newLocation = gameData.location;
+
+        if (mapController.isValidMovementRequest(oldLocation, movementRequest)) {
+          newLocation = locationController.processMovementRequest(oldLocation, movementRequest);
+          newLocation.region = mapController.getRegion(newLocation);
+          gameData.viewableMap = mapController.getViewableMap(newLocation, gameData.party.visionRadius);
+        }
+        gameData.location = newLocation;
+        const staminaCostOfTile = mapController.getStaminaCostOfTile(newLocation);
+        const isTurning = locationController.isTurning(oldLocation, newLocation);
+        const staminaCost = locationController.getStaminaCostOfMovement(isTurning, staminaCostOfTile);
+
+        gameData.party.members = partyController.adjustStamina(gameData.party.members, staminaCost);
+        gameData.dateTime = timeController.adjustTimeOfDay(gameData.dateTime, isTurning);
+        
+        if (encounterController.getAreMonstersEncountered(obfuscatedGameData.stepsSinceLastEncounter)) {
+          
+          const monsterGroups = encounterController.getMonsterGroups(gameData.location.region);
+          const playerFacingMonsterGroups = encounterController.getPlayerFacingMonsterGroups(monsterGroups);
+          const obfuscatedMonsterGroups = encounterController.getObfuscatedMonsterGroups(monsterGroups);
+          gameData.battleState = battleController.initializePlayerFacingBattleState(playerFacingMonsterGroups);
+          obfuscatedGameData.battleState = battleController.initializeObfuscatedBattleState(obfuscatedMonsterGroups);
+          obfuscatedGameData.stepsSinceLastEncounter = 0; // Wah wahh...
+        } else if (mapEventController.getMapEvent(newLocation.x, newLocation.y)) {
+          //Set some event state
+        } else {
+          obfuscatedGameData.stepsSinceLastEncounter++;
+          console.log('Steps since last encounter: ', obfuscatedGameData.stepsSinceLastEncounter);
+        }
+
+        gameController.cacheGame(gameData, obfuscatedGameData);
+        result.json(gameData);
       }
     });
 
 app.use('/dungeon-stroll', router);
 
 export default app;
-
-
-
-/* DUNGEON-STROLL API
- * ====================
- * 
- * base: 
- * /dungeon-stroll
- * 
- * party: Object that contains all player facing game state for the party
- * 
- * GET: /dungeon-stroll/party/{id} | Returns game state for party
- * 
- * POST: /dungeon-stroll/party/{id}/moveOrder | Move the party
- *  Body argument: movement delta {x, y, facingDirection}
- *  Returns: New party state DTO
- * 
- * POST: /dungeon-stroll/party | Create a new party
- *  Body argument: new party data? { characterNames[] }
- * 
- *
- * 
- * 
- * 
- * 
- * 
- * 
- */ 
-
-
